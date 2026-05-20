@@ -1,6 +1,5 @@
 package com.microservices.identity_service.configuration;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -12,10 +11,15 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
+
+import com.microservices.identity_service.entity.SigningKey;
+import com.microservices.identity_service.service.KeyService;
+import com.nimbusds.jwt.SignedJWT;
 
 import javax.crypto.spec.SecretKeySpec;
 
@@ -24,6 +28,8 @@ import javax.crypto.spec.SecretKeySpec;
 @EnableMethodSecurity
 public class SecurityConfig {
 
+    KeyService keyService;
+
     private final String[] PUBLIC_ENDPOINTS = {
             "/api/v1/users/register",
             "/api/v1/auth/login",
@@ -31,9 +37,6 @@ public class SecurityConfig {
             "/api/v1/auth/refresh-token",
             "/api/v1/auth/logout"
     };
-
-    @Value("${jwt.signerKey}")
-    private String signerKey;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity httpSecurity) throws Exception {
@@ -60,13 +63,40 @@ public class SecurityConfig {
         return jwtAuthenticationConverter;
     }
 
+    // @Bean
+    // JwtDecoder jwtDecoder() {
+    // SecretKeySpec secretKeySpec = new SecretKeySpec(signerKey.getBytes(),
+    // "HS512");
+    // return NimbusJwtDecoder
+    // .withSecretKey(secretKeySpec)
+    // .macAlgorithm(MacAlgorithm.HS512)
+    // .build();
+    // }
+
     @Bean
     JwtDecoder jwtDecoder() {
-        SecretKeySpec secretKeySpec = new SecretKeySpec(signerKey.getBytes(), "HS512");
-        return NimbusJwtDecoder
-                .withSecretKey(secretKeySpec)
-                .macAlgorithm(MacAlgorithm.HS512)
-                .build();
+        return token -> {
+            try {
+                SignedJWT signedJWT = SignedJWT.parse(token);
+
+                // đọc kid từ header
+                String kid = signedJWT.getHeader().getKeyID();
+
+                SigningKey signingKey = keyService.getKeyByKid(kid);
+
+                SecretKeySpec secretKeySpec = new SecretKeySpec(signingKey.getSecret().getBytes(), "HS512");
+
+                NimbusJwtDecoder decoder = NimbusJwtDecoder
+                        .withSecretKey(secretKeySpec)
+                        .macAlgorithm(MacAlgorithm.HS512)
+                        .build();
+
+                return decoder.decode(token);
+
+            } catch (Exception e) {
+                throw new JwtException("Invalid token");
+            }
+        };
     }
 
     @Bean

@@ -21,6 +21,7 @@ import com.microservices.identity_service.dto.request.RefreshRequest;
 import com.microservices.identity_service.dto.response.AuthenticationResponse;
 import com.microservices.identity_service.dto.response.IntrospectResponse;
 import com.microservices.identity_service.entity.InvalidatedToken;
+import com.microservices.identity_service.entity.SigningKey;
 import com.microservices.identity_service.entity.User;
 import com.microservices.identity_service.exception.AppException;
 import com.microservices.identity_service.exception.ErrorCode;
@@ -45,10 +46,7 @@ import lombok.extern.slf4j.Slf4j;
 public class AuthenticationService {
     UserRepository userRepository;
     InvalidatedTokenRepository invalidatedTokenRepository;
-
-    @NonFinal
-    @Value("${jwt.signerKey}")
-    protected String SIGNER_KEY;
+    KeyService keyService;
 
     @NonFinal
     @Value("${jwt.valid-duration}")
@@ -69,17 +67,21 @@ public class AuthenticationService {
         if (!authenticated)
             throw new AppException(ErrorCode.UNAUTHENTICATED);
 
-        var token = generateToken(user);
+        var accessToken = generateAccessToken(user);
+        var refreshToken = generateRefreshToken(user);
 
         LocalDateTime loginTime = LocalDateTime.now();
         user.setLastAccessTime(loginTime);
         userRepository.save(user);
 
-        return AuthenticationResponse.builder().token(token).authenticated(true).build();
+        return AuthenticationResponse.builder()
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .authenticated(true)
+                .build();
     }
 
-    private String generateToken(User user) {
-        JWSHeader header = new JWSHeader(JWSAlgorithm.HS512);
+    private String generateAccessToken(User user) {
 
         JWTClaimsSet jwtClaimsSet = new JWTClaimsSet.Builder()
                 .subject(user.getUserName())
@@ -88,60 +90,143 @@ public class AuthenticationService {
                 .expirationTime(new Date(
                         Instant.now().plus(VALID_DURATION, ChronoUnit.SECONDS).toEpochMilli()))
                 .jwtID(UUID.randomUUID().toString())
-                .claim("ID:", user.getId())
-                .claim("User:", user.getUserName())
+                .claim("type", "access")
                 .claim("scope", buildScope(user))
                 .build();
 
-        Payload payload = new Payload(jwtClaimsSet.toJSONObject());
+        return signToken(jwtClaimsSet);
+    }
 
-        JWSObject jwsObject = new JWSObject(header, payload);
+    private String generateRefreshToken(User user) {
+
+        JWTClaimsSet claims = new JWTClaimsSet.Builder()
+                .subject(user.getUserName())
+                .issuer("Application")
+                .issueTime(new Date())
+                .expirationTime(new Date(
+                        Instant.now()
+                                .plus(REFRESHABLE_DURATION, ChronoUnit.SECONDS)
+                                .toEpochMilli()))
+                .jwtID(UUID.randomUUID().toString())
+                .claim("type", "refresh")
+                .build();
+
+        return signToken(claims);
+    }
+
+    private String signToken(JWTClaimsSet claimsSet) {
 
         try {
-            jwsObject.sign(new MACSigner(SIGNER_KEY.getBytes()));
+            SigningKey activeKey = keyService.getActiveKey();
+
+            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.HS512)
+                    .keyID(activeKey.getKid())
+                    .build();
+
+            JWSObject jwsObject = new JWSObject(
+                    header,
+                    new Payload(claimsSet.toJSONObject()));
+
+            jwsObject.sign(
+                    new MACSigner(activeKey.getSecret().getBytes()));
+
             return jwsObject.serialize();
+
         } catch (JOSEException e) {
-            log.error("Cannot create token", e);
-            throw new RuntimeException(e);
+            throw new RuntimeException("Cannot sign token", e);
         }
     }
 
     public IntrospectResponse introspect(IntrospectRequest request) throws JOSEException, ParseException {
-        var token = request.getToken();
-        boolean isValid = true;
+        boolean valid = true;
 
         try {
-            verifyToken(token, false);
-        } catch (AppException e) {
-            isValid = false;
+            String token = request.getToken();
+
+            SignedJWT signedJWT = SignedJWT.parse(token);
+
+            String type = signedJWT
+                    .getJWTClaimsSet()
+                    .getStringClaim("type");
+
+            if ("access".equals(type)) {
+                verifyAccessToken(token);
+            } else if ("refresh".equals(type)) {
+                verifyRefreshToken(token);
+            } else {
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+            }
+
+        } catch (Exception e) {
+            valid = false;
         }
 
-        return IntrospectResponse.builder().valid(isValid).build();
+        return IntrospectResponse.builder()
+                .valid(valid)
+                .build();
     }
 
-    private SignedJWT verifyToken(String token, boolean isRefresh) throws JOSEException, ParseException {
-        JWSVerifier verifier = new MACVerifier(SIGNER_KEY.getBytes());
+    private JWTClaimsSet verifyAccessToken(String token) {
 
-        SignedJWT signedJWT = SignedJWT.parse(token);
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(token);
 
-        Date expiryTime = (isRefresh)
-                ? new Date(signedJWT
-                        .getJWTClaimsSet()
-                        .getIssueTime()
-                        .toInstant()
-                        .plus(REFRESHABLE_DURATION, ChronoUnit.SECONDS)
-                        .toEpochMilli())
-                : signedJWT.getJWTClaimsSet().getExpirationTime();
+            String kid = signedJWT.getHeader().getKeyID();
 
-        var verified = signedJWT.verify(verifier);
+            SigningKey signingKey = keyService.getKeyByKid(kid);
 
-        if (!(verified && expiryTime.after(new Date())))
+            boolean verified = signedJWT.verify(
+                    new MACVerifier(signingKey.getSecret().getBytes()));
+
+            if (!verified)
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+
+            if (claims.getExpirationTime().before(new Date()))
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+
+            if (!"access".equals(claims.getStringClaim("type")))
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+
+            if (invalidatedTokenRepository.existsById(claims.getJWTID()))
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+
+            return claims;
+
+        } catch (Exception e) {
             throw new AppException(ErrorCode.UNAUTHENTICATED);
+        }
+    }
 
-        if (invalidatedTokenRepository.existsById(signedJWT.getJWTClaimsSet().getJWTID()))
+    private JWTClaimsSet verifyRefreshToken(String token) {
+
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(token);
+
+            String kid = signedJWT.getHeader().getKeyID();
+
+            SigningKey signingKey = keyService.getKeyByKid(kid);
+
+            boolean verified = signedJWT.verify(
+                    new MACVerifier(signingKey.getSecret().getBytes()));
+
+            if (!verified)
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+
+            if (claims.getExpirationTime().before(new Date()))
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+
+            if (!"refresh".equals(claims.getStringClaim("type")))
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+
+            return claims;
+
+        } catch (Exception e) {
             throw new AppException(ErrorCode.UNAUTHENTICATED);
-
-        return signedJWT;
+        }
     }
 
     private String buildScope(User user) {
@@ -158,35 +243,34 @@ public class AuthenticationService {
     }
 
     public AuthenticationResponse refreshToken(RefreshRequest request) throws ParseException, JOSEException {
-        var signedJWT = verifyToken(request.getToken(), true);
+        var claims = verifyRefreshToken(request.getToken());
 
-        var jit = signedJWT.getJWTClaimsSet().getJWTID();
-        var expiryTime = signedJWT.getJWTClaimsSet().getExpirationTime();
+        // blacklist refresh token cũ
+        invalidatedTokenRepository.save(
+                InvalidatedToken.builder()
+                        .id(claims.getJWTID())
+                        .expiryTime(claims.getExpirationTime())
+                        .build());
 
-        InvalidatedToken invalidatedToken = InvalidatedToken.builder().id(jit).expiryTime(expiryTime).build();
-
-        invalidatedTokenRepository.save(invalidatedToken);
-
-        var username = signedJWT.getJWTClaimsSet().getSubject();
-
-        var user = userRepository.findByUserName(username)
+        var user = userRepository.findByUserName(claims.getSubject())
                 .orElseThrow(() -> new AppException(ErrorCode.UNAUTHENTICATED));
 
-        var token = generateToken(user);
-
-        return AuthenticationResponse.builder().token(token).authenticated(true).build();
+        return AuthenticationResponse.builder()
+                .accessToken(generateAccessToken(user))
+                .refreshToken(generateRefreshToken(user))
+                .authenticated(true)
+                .build();
     }
 
     public void logout(LogoutRequest request) throws ParseException, JOSEException {
         try {
-            var signToken = verifyToken(request.getToken(), true);
+            var claims = verifyRefreshToken(request.getToken());
 
-            String jit = signToken.getJWTClaimsSet().getJWTID();
-            Date expiryTime = signToken.getJWTClaimsSet().getExpirationTime();
-
-            InvalidatedToken invalidatedToken = InvalidatedToken.builder().id(jit).expiryTime(expiryTime).build();
-
-            invalidatedTokenRepository.save(invalidatedToken);
+            invalidatedTokenRepository.save(
+                    InvalidatedToken.builder()
+                            .id(claims.getJWTID())
+                            .expiryTime(claims.getExpirationTime())
+                            .build());
         } catch (AppException exception) {
             log.info("Token already expired");
         }

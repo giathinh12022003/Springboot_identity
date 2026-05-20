@@ -39,6 +39,15 @@ public class User {
     @Column(name = "password", nullable = false, columnDefinition = "TEXT")
     String passWord;
 
+    @Column(name = "name",  nullable = false, columnDefinition = "TEXT")
+    String name;
+
+    @Column(name = "phone_number", nullable = false, columnDefinition = "TEXT")
+    String phoneNumber;
+
+    @Column(name = "email", columnDefinition = "TEXT")
+    String email;
+
     @Column(name = "status", nullable = false, columnDefinition = "TEXT")
     String status;
 

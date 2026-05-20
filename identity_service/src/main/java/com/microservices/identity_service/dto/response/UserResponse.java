@@ -18,6 +18,9 @@ public class UserResponse {
     String id;
     String userName;
     String status;
+    String name;
+    String phoneNumber;
+    String email;
     LocalDateTime createdAt;
     LocalDateTime lastUpdated;
 }
