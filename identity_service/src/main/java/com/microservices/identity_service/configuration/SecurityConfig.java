@@ -9,7 +9,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -21,7 +21,10 @@ import com.microservices.identity_service.entity.SigningKey;
 import com.microservices.identity_service.service.KeyService;
 import com.nimbusds.jwt.SignedJWT;
 
-import javax.crypto.spec.SecretKeySpec;
+import java.security.KeyFactory;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 
 @Configuration
 @EnableWebSecurity
@@ -84,11 +87,24 @@ public class SecurityConfig {
 
                 SigningKey signingKey = keyService.getKeyByKid(kid);
 
-                SecretKeySpec secretKeySpec = new SecretKeySpec(signingKey.getSecret().getBytes(), "HS512");
+                // SecretKeySpec secretKeySpec = new
+                // SecretKeySpec(signingKey.getSecret().getBytes(), "HS512");
+
+                // NimbusJwtDecoder decoder = NimbusJwtDecoder
+                // .withSecretKey(secretKeySpec)
+                // .macAlgorithm(MacAlgorithm.HS512)
+                // .build();
+
+                byte[] keyBytes = Base64.getDecoder()
+                        .decode(signingKey.getPublicKey());
+
+                RSAPublicKey publicKey = (RSAPublicKey) KeyFactory.getInstance("RSA")
+                        .generatePublic(
+                                new X509EncodedKeySpec(keyBytes));
 
                 NimbusJwtDecoder decoder = NimbusJwtDecoder
-                        .withSecretKey(secretKeySpec)
-                        .macAlgorithm(MacAlgorithm.HS512)
+                        .withPublicKey(publicKey)
+                        .signatureAlgorithm(SignatureAlgorithm.RS256)
                         .build();
 
                 return decoder.decode(token);

@@ -9,6 +9,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -27,7 +28,12 @@ public class SigningKey {
     private String kid;
 
     @Column(nullable = false)
-    private String secret;
+    @Lob
+    private String privateKey;
+
+    @Column(nullable = false)
+    @Lob
+    private String publicKey;
 
     @Enumerated(EnumType.STRING)
     private KeyStatus status; // ACTIVE, RETIRED

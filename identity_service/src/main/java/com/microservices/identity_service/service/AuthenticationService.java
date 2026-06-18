@@ -1,9 +1,17 @@
 package com.microservices.identity_service.service;
 
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.text.ParseException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.Base64;
 import java.util.Date;
 import java.util.StringJoiner;
 import java.util.UUID;
@@ -28,8 +36,8 @@ import com.microservices.identity_service.exception.ErrorCode;
 import com.microservices.identity_service.repository.InvalidatedTokenRepository;
 import com.microservices.identity_service.repository.UserRepository;
 import com.nimbusds.jose.*;
-import com.nimbusds.jose.crypto.MACSigner;
-import com.nimbusds.jose.crypto.MACVerifier;
+import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.crypto.RSASSAVerifier;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
@@ -117,25 +125,55 @@ public class AuthenticationService {
     private String signToken(JWTClaimsSet claimsSet) {
 
         try {
+
             SigningKey activeKey = keyService.getActiveKey();
 
-            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.HS512)
+            byte[] keyBytes = Base64.getDecoder()
+                    .decode(activeKey.getPrivateKey());
+
+            PrivateKey privateKey = KeyFactory.getInstance("RSA")
+                    .generatePrivate(
+                            new PKCS8EncodedKeySpec(keyBytes));
+
+            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.RS256)
                     .keyID(activeKey.getKid())
                     .build();
 
-            JWSObject jwsObject = new JWSObject(
-                    header,
-                    new Payload(claimsSet.toJSONObject()));
+            SignedJWT signedJWT = new SignedJWT(header, claimsSet);
 
-            jwsObject.sign(
-                    new MACSigner(activeKey.getSecret().getBytes()));
+            signedJWT.sign(
+                    new RSASSASigner(
+                            (RSAPrivateKey) privateKey));
 
-            return jwsObject.serialize();
+            return signedJWT.serialize();
 
-        } catch (JOSEException e) {
-            throw new RuntimeException("Cannot sign token", e);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
+
+    // private String signToken(JWTClaimsSet claimsSet) {
+
+    // try {
+    // SigningKey activeKey = keyService.getActiveKey();
+
+    // JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.HS512)
+    // .keyID(activeKey.getKid())
+    // .build();
+
+    // JWSObject jwsObject = new JWSObject(
+    // header,
+    // new Payload(claimsSet.toJSONObject()));
+
+    // jwsObject.sign(
+    // new MACSigner(activeKey.getSecret().getBytes()));
+
+    // return jwsObject.serialize();
+
+    // } catch (JOSEException e) {
+    // throw new RuntimeException("Cannot sign token", e);
+    // }
+    // }
 
     public IntrospectResponse introspect(IntrospectRequest request) throws JOSEException, ParseException {
         boolean valid = true;
@@ -151,8 +189,6 @@ public class AuthenticationService {
 
             if ("access".equals(type)) {
                 verifyAccessToken(token);
-            } else if ("refresh".equals(type)) {
-                verifyRefreshToken(token);
             } else {
                 throw new AppException(ErrorCode.UNAUTHENTICATED);
             }
@@ -171,12 +207,27 @@ public class AuthenticationService {
         try {
             SignedJWT signedJWT = SignedJWT.parse(token);
 
+            // String kid = signedJWT.getHeader().getKeyID();
+
+            // SigningKey signingKey = keyService.getKeyByKid(kid);
+
+            // boolean verified = signedJWT.verify(
+            // new MACVerifier(signingKey.getSecret().getBytes()));
+
             String kid = signedJWT.getHeader().getKeyID();
 
             SigningKey signingKey = keyService.getKeyByKid(kid);
 
+            byte[] keyBytes = Base64.getDecoder()
+                    .decode(signingKey.getPublicKey());
+
+            PublicKey publicKey = KeyFactory.getInstance("RSA")
+                    .generatePublic(
+                            new X509EncodedKeySpec(keyBytes));
+
             boolean verified = signedJWT.verify(
-                    new MACVerifier(signingKey.getSecret().getBytes()));
+                    new RSASSAVerifier(
+                            (RSAPublicKey) publicKey));
 
             if (!verified)
                 throw new AppException(ErrorCode.UNAUTHENTICATED);
@@ -204,12 +255,27 @@ public class AuthenticationService {
         try {
             SignedJWT signedJWT = SignedJWT.parse(token);
 
+            // String kid = signedJWT.getHeader().getKeyID();
+
+            // SigningKey signingKey = keyService.getKeyByKid(kid);
+
+            // boolean verified = signedJWT.verify(
+            // new MACVerifier(signingKey.getSecret().getBytes()));
+
             String kid = signedJWT.getHeader().getKeyID();
 
             SigningKey signingKey = keyService.getKeyByKid(kid);
 
+            byte[] keyBytes = Base64.getDecoder()
+                    .decode(signingKey.getPublicKey());
+
+            PublicKey publicKey = KeyFactory.getInstance("RSA")
+                    .generatePublic(
+                            new X509EncodedKeySpec(keyBytes));
+
             boolean verified = signedJWT.verify(
-                    new MACVerifier(signingKey.getSecret().getBytes()));
+                    new RSASSAVerifier(
+                            (RSAPublicKey) publicKey));
 
             if (!verified)
                 throw new AppException(ErrorCode.UNAUTHENTICATED);

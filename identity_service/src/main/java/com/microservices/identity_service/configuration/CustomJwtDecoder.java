@@ -8,9 +8,14 @@ import org.springframework.stereotype.Component;
 import com.microservices.identity_service.entity.SigningKey;
 import com.microservices.identity_service.service.KeyService;
 import com.nimbusds.jose.JWSVerifier;
-import com.nimbusds.jose.crypto.MACVerifier;
+import com.nimbusds.jose.crypto.RSASSAVerifier;
 import com.nimbusds.jwt.SignedJWT;
 
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 import java.util.Date;
 
 @Component
@@ -29,7 +34,17 @@ public class CustomJwtDecoder implements JwtDecoder {
             SigningKey signingKey = keyService.getKeyByKid(kid);
 
             // 2. verify signature
-            JWSVerifier verifier = new MACVerifier(signingKey.getSecret().getBytes());
+            // JWSVerifier verifier = new MACVerifier(signingKey.getSecret().getBytes());
+
+            byte[] keyBytes = Base64.getDecoder()
+                    .decode(signingKey.getPublicKey());
+
+            PublicKey publicKey = KeyFactory.getInstance("RSA")
+                    .generatePublic(
+                            new X509EncodedKeySpec(keyBytes));
+
+            JWSVerifier verifier = new RSASSAVerifier(
+                    (RSAPublicKey) publicKey);
 
             boolean verified = signedJWT.verify(verifier);
 
