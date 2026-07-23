@@ -24,8 +24,6 @@ import org.springframework.util.CollectionUtils;
 
 import com.microservices.identity_service.dto.request.AuthenticationRequest;
 import com.microservices.identity_service.dto.request.IntrospectRequest;
-import com.microservices.identity_service.dto.request.LogoutRequest;
-import com.microservices.identity_service.dto.request.RefreshRequest;
 import com.microservices.identity_service.dto.response.AuthenticationResponse;
 import com.microservices.identity_service.dto.response.IntrospectResponse;
 import com.microservices.identity_service.entity.InvalidatedToken;
@@ -308,8 +306,8 @@ public class AuthenticationService {
         return stringJoiner.toString();
     }
 
-    public AuthenticationResponse refreshToken(RefreshRequest request) throws ParseException, JOSEException {
-        var claims = verifyRefreshToken(request.getToken());
+    public AuthenticationResponse refreshToken(String refreshToken) throws ParseException, JOSEException {
+        var claims = verifyRefreshToken(refreshToken);
 
         // blacklist refresh token cũ
         invalidatedTokenRepository.save(
@@ -323,14 +321,13 @@ public class AuthenticationService {
 
         return AuthenticationResponse.builder()
                 .accessToken(generateAccessToken(user))
-                .refreshToken(generateRefreshToken(user))
                 .authenticated(true)
                 .build();
     }
 
-    public void logout(LogoutRequest request) throws ParseException, JOSEException {
+    public void logout(String refreshToken) throws ParseException, JOSEException {
         try {
-            var claims = verifyRefreshToken(request.getToken());
+            var claims = verifyRefreshToken(refreshToken);
 
             invalidatedTokenRepository.save(
                     InvalidatedToken.builder()
